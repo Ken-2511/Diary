@@ -50,7 +50,6 @@ def filt_dir(dir_names: list[str], target_dir_name: str, top_n: int) -> list[str
         dir['vec_score'] = 15 * dir['similarity']
         dir['time_score'] = -1 * math.log(dir['time_distance_days'] + 1)
         dir['total_score'] = dir['vec_score'] + dir['time_score']
-        print(dir['name'], dir['vec_score'], dir['time_score'], dir['total_score'])
     # sort
     dirs.sort(key=lambda x: x['total_score'], reverse=True)
     return [dir['name'] for dir in dirs[:top_n]]
