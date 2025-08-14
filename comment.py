@@ -55,10 +55,10 @@ with open(os.path.join(config['diary_dir'], target_dir_name, config['diary_name'
 messages = [
     {"role": "system", "content": init_sys_prompt},
     {"role": "system", "content": last_diary_prompt},
-    {"role": "user", "content": target_diary}
 ]
 for diary in diary_list:
-    messages.insert(-2, {"role": "user", "content": diary})
+    messages.append({"role": "user", "content": diary})
+messages.append({"role": "user", "content": target_diary})
 # save the messages to the temp folder (for debugging purposes)
 with open(os.path.join(config['prj_dir'], 'temp', 'messages.json'), 'w', encoding='utf-8') as f:
     json.dump(messages, f, ensure_ascii=False, indent=4)

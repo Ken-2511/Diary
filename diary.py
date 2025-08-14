@@ -14,4 +14,4 @@ with open(os.path.join(dir_name, config['diary_name']), 'w') as f:
     pass
 
 # open text app
-os.system(f'{config['text_app']} {os.path.join(dir_name, config['diary_name'])}')
+os.system(f"{config['text_app']} \"{os.path.join(dir_name, config['diary_name'])}\"")
