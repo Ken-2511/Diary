@@ -3,11 +3,11 @@ diary_name = 'diary.txt'
 comment_name = 'comment.txt'
 title_name = 'title.txt'
 usage_name = 'usage.json'
-diary_dir = 'C:/Users/IWMAI/OneDrive/Personal-Diaries'
-prj_dir = 'C:/Users/IWMAI/OneDrive/Programs/Python/Diary'
+embedding_name = 'vec.npy'
+diary_dir = 'C:\\Users\\IWMAI\\OneDrive\\Personal-Diaries'
+prj_dir = 'C:\\Users\\IWMAI\\OneDrive\\Programs\\Python\\Diary'
 
 text_app = 'notepad' # 用于写日记的文本编辑器
 model = 'gpt-5'
 model4title = 'o4-mini'
-default_token_limit = 15000
-
+top_n = 10  # 默认筛选出的相关日记数量

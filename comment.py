@@ -3,8 +3,10 @@ import re
 import json
 import time
 import tomllib
+from datetime import datetime
 from utils.title import create_title
 from utils.request_llm import request_llm
+from utils.filt_dir import filt_dir
 
 # load config
 print('Loading config...')
@@ -30,12 +32,20 @@ if target_dir_name is None:
     input('Press Enter to exit...')
     exit()
 
-# load the diaries, currently we only load the last 10 diaries
+# filter the diaries
+print('Filtering the diaries...')
+dir_names = filt_dir(dir_names, target_dir_name, config['top_n'])
+dir_names.sort(key=lambda x: x.split('-'))
+
+# load the diaries, and add the timestamp to the diaries
 print('Loading diaries...')
 diary_list = []
-for dn in dir_names[-10:]:
+for dn in dir_names:
+    timestamp = datetime.strptime(dn, '%Y-%m-%d-%H-%M-%S')
     with open(os.path.join(config['diary_dir'], dn, config['diary_name']), 'r', encoding='utf-8') as f:
-        diary_list.append(f.read())
+        diary = f.read()
+        diary = f'(Datetime: {timestamp})\n\n{diary}'
+        diary_list.append(diary)
 
 # create and save the title
 print('Creating and saving the title...')
@@ -52,17 +62,19 @@ with open(os.path.join('config', 'last_diary.prompt.md'), 'r', encoding='utf-8')
     last_diary_prompt = f.read()
 with open(os.path.join(config['diary_dir'], target_dir_name, config['diary_name']), 'r', encoding='utf-8') as f:
     target_diary = f.read()
+    timestamp = datetime.strptime(target_dir_name, '%Y-%m-%d-%H-%M-%S')
+    target_diary = f'(Datetime: {timestamp})\n\n{target_diary}'
 messages = [
     {"role": "system", "content": init_sys_prompt},
-    {"role": "system", "content": last_diary_prompt},
 ]
 for diary in diary_list:
     messages.append({"role": "user", "content": diary})
+messages.append({"role": "system", "content": last_diary_prompt})
 messages.append({"role": "user", "content": target_diary})
 # save the messages to the temp folder (for debugging purposes)
 with open(os.path.join(config['prj_dir'], 'temp', 'messages.json'), 'w', encoding='utf-8') as f:
     json.dump(messages, f, ensure_ascii=False, indent=4)
-
+exit()
 # request the LLM
 print('Requesting the LLM...')
 start_time = time.time()

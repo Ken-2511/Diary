@@ -3,6 +3,7 @@
 import os
 import tomllib
 from openai import OpenAI
+from datetime import datetime
 
 __all__ = ['create_title']
 
@@ -14,9 +15,11 @@ client = OpenAI()
 
 
 def create_title(dir_name: str) -> str:
+    timestamp = datetime.strptime(dir_name, '%Y-%m-%d-%H-%M-%S')
     with open(os.path.join(config['diary_dir'], dir_name, config['diary_name']), 'r', encoding='utf-8') as f:
         diary = f.read()
-    
+        diary = f'(Datetime: {timestamp})\n\n{diary}'
+
     with open(os.path.join('config', 'title.prompt.md'), 'r', encoding='utf-8') as f:
         title_sys_prompt = f.read()
 
