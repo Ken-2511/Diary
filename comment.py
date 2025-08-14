@@ -74,7 +74,7 @@ messages.append({"role": "user", "content": target_diary})
 # save the messages to the temp folder (for debugging purposes)
 with open(os.path.join(config['prj_dir'], 'temp', 'messages.json'), 'w', encoding='utf-8') as f:
     json.dump(messages, f, ensure_ascii=False, indent=4)
-exit()
+
 # request the LLM
 print('Requesting the LLM...')
 start_time = time.time()

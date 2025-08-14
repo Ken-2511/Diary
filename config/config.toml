@@ -10,4 +10,4 @@ prj_dir = 'C:\\Users\\IWMAI\\OneDrive\\Programs\\Python\\Diary'
 text_app = 'notepad' # 用于写日记的文本编辑器
 model = 'gpt-5'
 model4title = 'o4-mini'
-top_n = 10  # 默认筛选出的相关日记数量
+top_n = 15  # 默认筛选出的相关日记数量
