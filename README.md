@@ -9,7 +9,7 @@ This is the new diary-with-AI-feedback project for one of my best friends (as we
 
 ### Features and Importances
 
-1. create a diary entry ⭐⭐⭐⭐⭐
+1. ✅ create a diary entry ⭐⭐⭐⭐⭐
 2. create a comment by requesting ChatGPT ⭐⭐⭐⭐⭐
 3. allow the user to choose AI model ⭐⭐
 4. clip the previous diaries according to the relevance, date, etc. so as to fit in the LLM's context window ⭐⭐⭐⭐

@@ -1,0 +1,7 @@
+# 应用基本信息
+diary_dir = 'C:/Users/IWMAI/OneDrive/Personal-Diaries'
+diary_name = 'diary.txt'
+comment_name = 'comment.txt'
+text_app = 'notepad' # 用于写日记的文本编辑器
+model = 'gpt-5'
+default_token_limit = 15000
