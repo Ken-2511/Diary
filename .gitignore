@@ -1,3 +1,5 @@
 venv/
 __pycache__/
 temp/
+config/config.toml
+config/init_sys.prompt.md

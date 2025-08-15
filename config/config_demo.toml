@@ -1,0 +1,13 @@
+# Application basic information
+diary_name = 'diary.txt'
+comment_name = 'comment.txt'
+title_name = 'title.txt'
+usage_name = 'usage.json'
+embedding_name = 'vec.npy'
+diary_dir = 'C:\path\to\the\diary\dir'
+prj_dir = 'C:\path\to\the\project\dir'
+
+text_app = 'notepad' # Text editor for writing diary
+model = 'gpt-5'
+model4title = 'o4-mini'
+top_n = 30  # Default number of related diaries to filter
