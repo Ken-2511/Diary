@@ -1,4 +1,4 @@
-try:
+def main():
     import os
     import tomllib
     from datetime import datetime
@@ -17,6 +17,9 @@ try:
     # open text app
     os.system(f"{config['text_app']} \"{os.path.join(dir_name, config['diary_name'])}\"")
 
-except Exception as e:
-    print(e)
-    input('Press Enter to continue...')
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as e:
+        print(e)
+        input('Press Enter to continue...')
