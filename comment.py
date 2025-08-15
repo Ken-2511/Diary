@@ -72,6 +72,7 @@ for diary in diary_list:
 messages.append({"role": "system", "content": last_diary_prompt})
 messages.append({"role": "user", "content": target_diary})
 # save the messages to the temp folder (for debugging purposes)
+os.makedirs(os.path.join(config['prj_dir'], 'temp'), exist_ok=True)
 with open(os.path.join(config['prj_dir'], 'temp', 'messages.json'), 'w', encoding='utf-8') as f:
     json.dump(messages, f, ensure_ascii=False, indent=4)
 
