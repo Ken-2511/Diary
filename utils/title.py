@@ -8,7 +8,7 @@ from datetime import datetime
 __all__ = ['create_title']
 
 # load config
-with open('config/config.toml', 'rb') as f:
+with open(os.path.join('config', 'config.toml'), 'rb') as f:
     config = tomllib.load(f)
 
 client = OpenAI()
