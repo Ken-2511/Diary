@@ -93,7 +93,7 @@ def main():
 
     # print the important information and exit
     print(f"The comment has been saved to {os.path.join(config['diary_dir'], target_dir_name, config['comment_name'])}")
-    print(f"Input tokens: {usage['prompt_token_count']}, output tokens: {usage['thoughts_token_count']}, total tokens: {usage['total_token_count']}")
+    print(f"Input tokens: {usage['prompt_tokens']}, output tokens: {usage['completion_tokens']}, total tokens: {usage['total_tokens']}")
     print(f"Time taken: {end_time - start_time:.2f} seconds")
     input('Press Enter to exit...')
 
