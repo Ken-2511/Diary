@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📚 AI 日记助手</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- Marked.js for Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- 顶部导航栏 -->
+        <header class="header">
+            <h1>📚 AI 日记助手</h1>
+            <div class="header-controls">
+                <div class="search-box">
+                    <input type="text" id="search-input" placeholder="🔍 搜索日记..." />
+                    <button id="search-btn">搜索</button>
+                    <button id="clear-search-btn" class="hidden">清除</button>
+                </div>
+                <button id="reload-btn" title="重新加载日记">🔄</button>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <!-- 左侧日记列表 -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <h2>📅 日记列表</h2>
+                    <div class="filter-buttons">
+                        <button class="filter-btn active" data-filter="all">全部</button>
+                        <button class="filter-btn" data-filter="pending">待评论</button>
+                    </div>
+                </div>
+                <ul id="diary-list" class="diary-list">
+                    <!-- 日记列表项会在这里动态生成 -->
+                </ul>
+            </aside>
+
+            <!-- 右侧内容区 -->
+            <section class="content">
+                <div id="empty-state" class="empty-state">
+                    <p>👈 选择一篇日记开始阅读</p>
+                </div>
+                
+                <article id="diary-content" class="diary-content hidden">
+                    <div class="diary-header">
+                        <h2 id="diary-title">标题</h2>
+                        <div class="diary-meta">
+                            <span id="diary-date">日期</span>
+                            <span id="diary-word-count">字数</span>
+                            <span id="diary-status">状态</span>
+                        </div>
+                    </div>
+                    
+                    <div class="diary-section">
+                        <h3>📝 日记内容</h3>
+                        <div id="diary-body" class="markdown-body"></div>
+                    </div>
+                    
+                    <div id="comment-section" class="diary-section">
+                        <h3>💬 AI 评论</h3>
+                        <div id="comment-body" class="markdown-body"></div>
+                    </div>
+                    
+                    <div id="usage-section" class="diary-section hidden">
+                        <h3>📊 Token 使用</h3>
+                        <div id="usage-body" class="usage-info"></div>
+                    </div>
+                </article>
+            </section>
+        </main>
+
+        <!-- 底部状态栏 -->
+        <footer class="footer">
+            <div id="stats">
+                <span>加载中...</span>
+            </div>
+        </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
