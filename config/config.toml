@@ -1,0 +1,15 @@
+# Application basic information
+diary_name = 'diary.txt'
+comment_name = 'comment.txt'
+title_name = 'title.txt'
+usage_name = 'usage.json'
+embedding_name = 'vec.npy'
+diary_dir = 'C:\Users\IWMAI\OneDrive\Personal-Diaries'
+prj_dir = 'C:\Users\IWMAI\OneDrive\Programs\Python\Diary'
+
+text_app = 'notepad' # Text editor for writing diary
+model = 'gpt-5.1'
+# model = 'gemini-3-pro-preview'
+model4title = 'o4-mini'
+# model4title = 'gemini-3-pro-preview'
+top_n = 50  # Default number of related diaries to filter
