@@ -13,3 +13,8 @@ model = 'gpt-5.1'
 model4title = 'o4-mini'
 # model4title = 'gemini-3-pro-preview'
 top_n = 50  # Default number of related diaries to filter
+
+# Diary filtering parameters
+vec_score_weight = 1.0  # Weight for vector similarity score
+half_life_days = 30  # Half-life for time decay in days
+recency_weight = 1.0  # Weight for recency score
