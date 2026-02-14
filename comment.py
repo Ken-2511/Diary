@@ -8,6 +8,7 @@ def main():
     from utils.title import create_title
     from utils.request_llm import request_llm
     from utils.filt_dir import filt_dir
+    from utils.load_diary import load_diary_entry, entry_to_content
 
     # load config
     print('Loading config...')
@@ -48,15 +49,14 @@ def main():
     # load the diaries and the comments, and add the timestamp to the diaries
     print('Loading diaries...')
     messages = []
+    max_chars = config.get('max_history_chars', 0)
     for dn in dir_names:
-        timestamp = datetime.strptime(dn, '%Y-%m-%d-%H-%M-%S')
-        with open(os.path.join(config['diary_dir'], dn, config['diary_name']), 'r', encoding='utf-8') as f:
-            diary_content = f.read()
-            diary_content = f'(Datetime: {timestamp})\n\n{diary_content}'
-            messages.append({'role': 'user', 'content': diary_content})
-        with open(os.path.join(config['diary_dir'], dn, config['comment_name']), 'r', encoding='utf-8') as f:
-            comment_content = f.read()
-            messages.append({'role': 'assistant', 'content': comment_content})
+        entry = load_diary_entry(config['diary_dir'], dn, config)
+        messages.append({'role': 'user', 'content': entry_to_content(entry, max_chars=max_chars)})
+        comment = entry['comment'] or ''
+        if max_chars > 0 and len(comment) > max_chars:
+            comment = comment[:max_chars] + '...[truncated]'
+        messages.append({'role': 'assistant', 'content': comment})
 
     # prepare the messages for the LLM
     print('Preparing the messages for the LLM...')
@@ -64,13 +64,10 @@ def main():
         init_sys_prompt = f.read()
     with open(os.path.join('config', 'last_diary.prompt.md'), 'r', encoding='utf-8') as f:
         last_diary_prompt = f.read()
-    with open(os.path.join(config['diary_dir'], target_dir_name, config['diary_name']), 'r', encoding='utf-8') as f:
-        target_diary = f.read()
-        timestamp = datetime.strptime(target_dir_name, '%Y-%m-%d-%H-%M-%S')
-        target_diary = f'(Datetime: {timestamp})\n\n{target_diary}'
+    target_entry = load_diary_entry(config['diary_dir'], target_dir_name, config)
     messages.insert(0, {"role": "system", "content": init_sys_prompt})
     messages.append({"role": "system", "content": last_diary_prompt})
-    messages.append({"role": "user", "content": target_diary})
+    messages.append({"role": "user", "content": entry_to_content(target_entry)})
     # save the messages to the temp folder (for debugging purposes)
     os.makedirs(os.path.join(config['prj_dir'], 'temp'), exist_ok=True)
     with open(os.path.join(config['prj_dir'], 'temp', 'messages.json'), 'w', encoding='utf-8') as f:

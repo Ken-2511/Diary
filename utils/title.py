@@ -4,6 +4,7 @@ import os
 import tomllib
 from openai import OpenAI
 from datetime import datetime
+from utils.load_diary import load_diary_entry, entry_to_content
 
 __all__ = ['create_title']
 
@@ -15,10 +16,8 @@ client = OpenAI()
 
 
 def create_title(dir_name: str) -> str:
-    timestamp = datetime.strptime(dir_name, '%Y-%m-%d-%H-%M-%S')
-    with open(os.path.join(config['diary_dir'], dir_name, config['diary_name']), 'r', encoding='utf-8') as f:
-        diary = f.read()
-        diary = f'(Datetime: {timestamp})\n\n{diary}'
+    entry = load_diary_entry(config['diary_dir'], dir_name, config)
+    content = entry_to_content(entry)
 
     with open(os.path.join('config', 'title.prompt.md'), 'r', encoding='utf-8') as f:
         title_sys_prompt = f.read()
@@ -27,7 +26,7 @@ def create_title(dir_name: str) -> str:
         model=config['model4title'],
         messages=[
             {"role": "system", "content": title_sys_prompt},
-            {"role": "user", "content": diary}
+            {"role": "user", "content": content}
         ]
     )
     return response.choices[0].message.content
