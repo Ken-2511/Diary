@@ -2,7 +2,7 @@
 
 import os
 import tomllib
-from openai import OpenAI
+import google.generativeai as genai
 from datetime import datetime
 from utils.load_diary import load_diary_entry, entry_to_content
 
@@ -12,8 +12,7 @@ __all__ = ['create_title']
 with open(os.path.join('config', 'config.toml'), 'rb') as f:
     config = tomllib.load(f)
 
-client = OpenAI()
-
+genai.configure()
 
 def create_title(dir_name: str) -> str:
     entry = load_diary_entry(config['diary_dir'], dir_name, config)
@@ -22,17 +21,17 @@ def create_title(dir_name: str) -> str:
     with open(os.path.join('config', 'title.prompt.md'), 'r', encoding='utf-8') as f:
         title_sys_prompt = f.read()
 
-    response = client.chat.completions.create(
-        model=config['model4title'],
-        messages=[
-            {"role": "system", "content": title_sys_prompt},
-            {"role": "user", "content": content}
-        ]
+    model = genai.GenerativeModel(
+        model_name=config['model4title'],
+        system_instruction=title_sys_prompt
     )
-    title = response.choices[0].message.content
-    if title is None:
+    
+    response = model.generate_content(content)
+    title = response.text
+    
+    if not title:
         raise ValueError("Failed to generate title: received None from API")
-    return title
+    return title.strip().strip('"')
 
 
 if __name__ == '__main__':

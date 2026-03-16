@@ -92,7 +92,7 @@ def _truncate(text: str, max_chars: int) -> str:
 
 
 def entry_to_content(entry: dict, include_images: bool = True, max_chars: int = 0) -> str | list:
-    """Convert a diary entry dict to OpenAI message content.
+    """Convert a diary entry dict to Gemini message content.
 
     Args:
         entry: Diary entry dict from load_diary_entry.
@@ -100,7 +100,7 @@ def entry_to_content(entry: dict, include_images: bool = True, max_chars: int = 
         max_chars: Max characters for diary text. 0 means no limit.
 
     If include_images is False or there are no images, returns a plain string.
-    Otherwise returns a list of content parts (text + image_url) for multimodal input.
+    Otherwise returns a list of content parts (text + inline_data) for multimodal input.
     """
     diary_text = _truncate(entry['text'], max_chars) if entry['text'] else ''
     text = f"(Datetime: {entry['timestamp']})\n\n{diary_text}"
@@ -108,10 +108,15 @@ def entry_to_content(entry: dict, include_images: bool = True, max_chars: int = 
     if not include_images or not entry['images']:
         return text
 
-    parts: list[dict] = [{"type": "text", "text": text}]
+    parts = [text]
     for img in entry['images']:
+        # Extract base64 data and mime type from data URL
+        data_url = img['base64']
+        header, b64_data = data_url.split(',', 1)
+        mime_type = header.split(':')[1].split(';')[0]
+        
         parts.append({
-            "type": "image_url",
-            "image_url": {"url": img['base64']},
+            "mime_type": mime_type,
+            "data": base64.b64decode(b64_data)
         })
     return parts

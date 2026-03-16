@@ -5,7 +5,7 @@ import re
 import json
 import tomllib
 import numpy as np
-from openai import OpenAI
+import google.generativeai as genai
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 
@@ -20,8 +20,8 @@ SECONDS_PER_DAY = 86400
 DEFAULT_NUM_RESULTS = 5
 DEFAULT_RECENCY_WEIGHT = 0.5
 MAX_NUM_DIARIES = 15
-EMBEDDING_MODEL = "text-embedding-3-large"
-CHAT_MODEL = "gpt-5.1"
+EMBEDDING_MODEL = "models/text-embedding-004"
+CHAT_MODEL = "gemini-1.5-pro"
 DEFAULT_TITLE = "无标题"
 
 
@@ -38,7 +38,7 @@ class QueryServer:
         with open(config_path, "rb") as f:
             self.config = tomllib.load(f)
         
-        self.client = OpenAI()
+        genai.configure()
         self.project_root = project_root
         
         print("Loading all diaries...")
@@ -99,11 +99,12 @@ class QueryServer:
     
     def _get_query_embedding(self, query: str) -> np.ndarray:
         """Get embedding for a query string."""
-        response = self.client.embeddings.create(
-            input=query,
-            model=EMBEDDING_MODEL
+        response = genai.embed_content(
+            model=EMBEDDING_MODEL,
+            content=query,
+            task_type="retrieval_query"
         )
-        return np.array(response.data[0].embedding, dtype=np.float32)
+        return np.array(response['embedding'], dtype=np.float32)
     
     def query(
         self, 
@@ -244,20 +245,18 @@ class QueryServer:
         """
         current_date_str = datetime.now().strftime(SIMPLE_DATE_FORMAT)
         
-        print("\n[Step 1] Analyzing intent with GPT...")
+        print("\n[Step 1] Analyzing intent with Gemini...")
         
-        refine_messages = [
-            {"role": "system", "content": self._get_query_refinement_prompt(current_date_str)},
-            {"role": "user", "content": user_question}
-        ]
-        
-        refine_response = self.client.chat.completions.create(
-            model=CHAT_MODEL,
-            messages=refine_messages,  # type: ignore
-            response_format={"type": "json_object"}
+        sys_instruction = self._get_query_refinement_prompt(current_date_str)
+        model = genai.GenerativeModel(
+             model_name=CHAT_MODEL,
+             system_instruction=sys_instruction,
+             generation_config={"response_mime_type": "application/json"}
         )
         
-        raw_content = refine_response.choices[0].message.content or "{}"
+        refine_response = model.generate_content(user_question)
+        
+        raw_content = refine_response.text or "{}"
         print(f"[AI Analysis] {raw_content}")
         
         try:
@@ -304,33 +303,30 @@ class QueryServer:
             json.dumps(query_results, ensure_ascii=False, indent=4)
         )
         
-        print("\n[Step 3] Building context and asking GPT...")
-        answer_messages = []
+        print("\n[Step 3] Building context and asking Gemini...")
+        sys_instruction = "根据context（用户写的日记）精确回答问题，如果context不包含答案则如实回答搜索不到答案，不可杜撰"
         
+        answer_model = genai.GenerativeModel(
+             model_name=CHAT_MODEL,
+             system_instruction=sys_instruction
+        )
+        
+        prompt_parts = []
         for result in query_results:
             diary_context = f"日期: {result['date']}\n标题: {result['title']}\n内容:\n{result['content']}"
-            answer_messages.append({"role": "user", "content": diary_context})
-        
-        answer_messages.append({
-            "role": "system",
-            "content": "根据context（用户写的日记）精确回答问题，如果context不包含答案则如实回答搜索不到答案，不可杜撰"
-        })
-        
-        answer_messages.append({"role": "user", "content": user_question})
+            prompt_parts.append(diary_context)
+            
+        prompt_parts.append("\n问题：" + user_question)
         
         print("\n[Answer]")
         print("-" * 60)
         
-        stream = self.client.chat.completions.create(
-            model=CHAT_MODEL,
-            messages=answer_messages,
-            stream=True
-        )
+        stream = answer_model.generate_content(prompt_parts, stream=True)
         
         full_answer = ""
         for chunk in stream:
-            if chunk.choices[0].delta.content is not None:
-                content = chunk.choices[0].delta.content
+            if chunk.text:
+                content = chunk.text
                 print(content, end='', flush=True)
                 full_answer += content
         
