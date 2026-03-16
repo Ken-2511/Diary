@@ -3,8 +3,11 @@ def main():
     import tomllib
     from datetime import datetime
 
+    # get the directory of this script
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
     # load config
-    with open('config/config.toml', 'rb') as f:
+    with open(os.path.join(base_dir, 'config/config.toml'), 'rb') as f:
         config = tomllib.load(f)
 
     # create the diary file

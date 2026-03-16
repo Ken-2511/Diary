@@ -29,7 +29,10 @@ def create_title(dir_name: str) -> str:
             {"role": "user", "content": content}
         ]
     )
-    return response.choices[0].message.content
+    title = response.choices[0].message.content
+    if title is None:
+        raise ValueError("Failed to generate title: received None from API")
+    return title
 
 
 if __name__ == '__main__':

@@ -10,9 +10,12 @@ def main():
     from utils.filt_dir import filt_dir
     from utils.load_diary import load_diary_entry, entry_to_content
 
+    # get the directory of this script
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
     # load config
     print('Loading config...')
-    with open('config/config.toml', 'rb') as f:
+    with open(os.path.join(base_dir, 'config/config.toml'), 'rb') as f:
         config = tomllib.load(f)
 
     # load all diary dirs
@@ -60,9 +63,9 @@ def main():
 
     # prepare the messages for the LLM
     print('Preparing the messages for the LLM...')
-    with open(os.path.join('config', 'init_sys.prompt.md'), 'r', encoding='utf-8') as f:
+    with open(os.path.join(base_dir, 'config', 'init_sys.prompt.md'), 'r', encoding='utf-8') as f:
         init_sys_prompt = f.read()
-    with open(os.path.join('config', 'last_diary.prompt.md'), 'r', encoding='utf-8') as f:
+    with open(os.path.join(base_dir, 'config', 'last_diary.prompt.md'), 'r', encoding='utf-8') as f:
         last_diary_prompt = f.read()
     target_entry = load_diary_entry(config['diary_dir'], target_dir_name, config)
     messages.insert(0, {"role": "system", "content": init_sys_prompt})
