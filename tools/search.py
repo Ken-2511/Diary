@@ -4,7 +4,8 @@ import os
 import re
 import tomllib
 import numpy as np
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 # Get the directory of the current script
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -16,19 +17,19 @@ config_path = os.path.join(project_root, "config", "config.toml")
 with open(config_path, "rb") as f:
     config = tomllib.load(f)
 
-genai.configure()
+client = genai.Client()
 
 def get_embedding_dir(dir_name: str) -> np.ndarray:
     path = os.path.join(config["diary_dir"], dir_name, config["embedding_name"])
     return np.load(path)
 
 def get_embedding_query(query: str) -> np.ndarray:
-    response = genai.embed_content(
-        model="models/text-embedding-004",
-        content=query,
-        task_type="retrieval_query",
+    response = client.models.embed_content(
+        model="gemini-embedding-2-preview",
+        contents=query,
+        config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
     )
-    return np.array(response["embedding"], dtype=np.float32)
+    return np.array(response.embeddings[0].values, dtype=np.float32)
 
 def get_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
     return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))

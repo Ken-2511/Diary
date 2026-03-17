@@ -5,7 +5,8 @@ import math
 from datetime import datetime, timedelta
 import tomllib
 import numpy as np
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 __all__ = ['filt_dir']
 
@@ -13,8 +14,8 @@ __all__ = ['filt_dir']
 with open(os.path.join('config', 'config.toml'), 'rb') as f:
     config = tomllib.load(f)
 
-# configure the embedding model
-genai.configure()
+# Initialize the client
+client = genai.Client()
 
 def get_embedding(dir_name: str) -> np.ndarray:
     path = os.path.join(config['diary_dir'], dir_name, config['embedding_name'])
@@ -23,12 +24,12 @@ def get_embedding(dir_name: str) -> np.ndarray:
     else:
         with open(os.path.join(config['diary_dir'], dir_name, config['diary_name']), 'r', encoding='utf-8') as f:
             content = f.read()
-        response = genai.embed_content(
-            model="models/text-embedding-004",
-            content=content,
-            task_type="retrieval_document",
+        response = client.models.embed_content(
+            model='gemini-embedding-2-preview',
+            contents=content,
+            config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
         )
-        vec = response['embedding']
+        vec = response.embeddings[0].values
         vec = np.array(vec, dtype=np.float32)
         np.save(path, vec)
         return vec

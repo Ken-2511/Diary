@@ -2,6 +2,11 @@ def main():
     import os
     import re
     import json
+    class BytesEncoder(json.JSONEncoder):
+        def default(self, o):
+            if isinstance(o, bytes):
+                return "<bytes data>"
+            return super().default(o)
     import time
     import tomllib
     from datetime import datetime
@@ -74,7 +79,7 @@ def main():
     # save the messages to the temp folder (for debugging purposes)
     os.makedirs(os.path.join(config['prj_dir'], 'temp'), exist_ok=True)
     with open(os.path.join(config['prj_dir'], 'temp', 'messages.json'), 'w', encoding='utf-8') as f:
-        json.dump(messages, f, ensure_ascii=False, indent=4)
+        json.dump(messages, f, ensure_ascii=False, indent=4, cls=BytesEncoder)
 
     # request the LLM
     print('Requesting the LLM...')
@@ -101,5 +106,6 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as e:
-        print(e)
+        import traceback
+        traceback.print_exc()
         input('Press Enter to continue...')

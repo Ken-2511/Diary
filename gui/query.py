@@ -5,7 +5,8 @@ import re
 import json
 import tomllib
 import numpy as np
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 
@@ -20,7 +21,7 @@ SECONDS_PER_DAY = 86400
 DEFAULT_NUM_RESULTS = 5
 DEFAULT_RECENCY_WEIGHT = 0.5
 MAX_NUM_DIARIES = 15
-EMBEDDING_MODEL = "models/text-embedding-004"
+EMBEDDING_MODEL = "gemini-embedding-2-preview"
 CHAT_MODEL = "gemini-1.5-pro"
 DEFAULT_TITLE = "无标题"
 
@@ -32,17 +33,15 @@ class QueryServer:
         print("Initializing QueryServer...")
         
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(script_dir)
+        self.project_root = os.path.dirname(script_dir)
         
-        config_path = os.path.join(project_root, "config", "config.toml")
+        config_path = os.path.join(self.project_root, "config", "config.toml")
         with open(config_path, "rb") as f:
             self.config = tomllib.load(f)
-        
-        genai.configure()
-        self.project_root = project_root
-        
-        print("Loading all diaries...")
+            
         self._load_all_diaries()
+        
+        self.client = genai.Client()
         print(f"Loaded {len(self.diaries)} diaries into memory")
     
     def _load_all_diaries(self):
@@ -99,12 +98,14 @@ class QueryServer:
     
     def _get_query_embedding(self, query: str) -> np.ndarray:
         """Get embedding for a query string."""
-        response = genai.embed_content(
+        response = self.client.models.embed_content(
             model=EMBEDDING_MODEL,
-            content=query,
-            task_type="retrieval_query"
+            contents=query,
+            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
         )
-        return np.array(response['embedding'], dtype=np.float32)
+        if not response.embeddings:
+            raise ValueError("No embeddings returned from the API")
+        return np.array(response.embeddings[0].values, dtype=np.float32)
     
     def query(
         self, 
@@ -248,14 +249,18 @@ class QueryServer:
         print("\n[Step 1] Analyzing intent with Gemini...")
         
         sys_instruction = self._get_query_refinement_prompt(current_date_str)
-        model = genai.GenerativeModel(
-             model_name=CHAT_MODEL,
-             system_instruction=sys_instruction,
-             generation_config={"response_mime_type": "application/json"}
+        
+        config = types.GenerateContentConfig(
+            system_instruction=sys_instruction,
+            response_mime_type="application/json"
         )
         
-        refine_response = model.generate_content(user_question)
-        
+        refine_response = self.client.models.generate_content(
+            model=CHAT_MODEL,
+            contents=user_question,
+            config=config
+        )
+
         raw_content = refine_response.text or "{}"
         print(f"[AI Analysis] {raw_content}")
         
@@ -306,10 +311,7 @@ class QueryServer:
         print("\n[Step 3] Building context and asking Gemini...")
         sys_instruction = "根据context（用户写的日记）精确回答问题，如果context不包含答案则如实回答搜索不到答案，不可杜撰"
         
-        answer_model = genai.GenerativeModel(
-             model_name=CHAT_MODEL,
-             system_instruction=sys_instruction
-        )
+        
         
         prompt_parts = []
         for result in query_results:
@@ -321,7 +323,11 @@ class QueryServer:
         print("\n[Answer]")
         print("-" * 60)
         
-        stream = answer_model.generate_content(prompt_parts, stream=True)
+        stream = self.client.models.generate_content_stream(
+            model=CHAT_MODEL,
+            contents=prompt_parts,
+            config=types.GenerateContentConfig(system_instruction=sys_instruction)
+        )
         
         full_answer = ""
         for chunk in stream:

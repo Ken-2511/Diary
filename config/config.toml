@@ -8,8 +8,8 @@ diary_dir = 'C:\Users\IWMAI\OneDrive\Personal-Diaries'
 prj_dir = 'C:\Users\IWMAI\OneDrive\Programs\Python\Diary'
 
 text_app = 'notepad' # Text editor for writing diary
-model = 'gemini-1.5-pro'
-model4title = 'gemini-1.5-pro'
+model = 'gemini-3.1-pro-preview'
+model4title = 'gemini-3.1-pro-preview'
 top_n = 50  # Default number of related diaries to filter
 
 # History diary truncation
