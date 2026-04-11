@@ -14,8 +14,12 @@ def read_comment(path):
     with open(path, 'r', encoding='utf-8') as f:
         return f.read()
 
+# Get the directory of the current script
+script_dir = os.path.dirname(os.path.abspath(__file__))
+# Get the project root directory (parent of script_dir)
+project_root = os.path.dirname(script_dir)
 # load config
-with open('config/config.toml', 'rb') as f:
+with open(os.path.join(project_root, 'config/config.toml'), 'rb') as f:
     config = tomllib.load(f)
 
 # load all dir names
