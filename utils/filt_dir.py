@@ -10,8 +10,10 @@ from google.genai import types
 
 __all__ = ['filt_dir']
 
+base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # load the config
-with open(os.path.join('config', 'config.toml'), 'rb') as f:
+with open(os.path.join(base_dir, 'config', 'config.toml'), 'rb') as f:
     config = tomllib.load(f)
 
 # Initialize the client

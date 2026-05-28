@@ -16,6 +16,12 @@ MIME_TYPES = {
     '.png': 'image/png',
 }
 
+WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
+
+def _format_timestamp(timestamp: datetime) -> str:
+    return f"{timestamp:%Y-%m-%d %H:%M:%S} {WEEKDAYS[timestamp.weekday()]}"
+
 
 def load_diary_entry(diary_dir: str, dir_name: str, config: dict) -> dict:
     """Load a diary entry from a directory into a structured dict.
@@ -103,7 +109,7 @@ def entry_to_content(entry: dict, include_images: bool = True, max_chars: int = 
     Otherwise returns a list of content parts (text + inline_data) for multimodal input.
     """
     diary_text = _truncate(entry['text'], max_chars) if entry['text'] else ''
-    text = f"(Datetime: {entry['timestamp']})\n\n{diary_text}"
+    text = f"(Datetime: {_format_timestamp(entry['timestamp'])})\n\n{diary_text}"
 
     if not include_images or not entry['images']:
         return text

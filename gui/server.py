@@ -28,6 +28,7 @@ USAGE_NAME = config.get("usage_name", "usage.json")
 
 # 日记缓存
 DIARY_CACHE = {}
+WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 # 心跳相关
 LAST_HEARTBEAT = time.time()
@@ -74,7 +75,7 @@ def parse_date(dir_name: str) -> datetime:
 def format_date_display(dir_name: str) -> str:
     """格式化日期用于显示"""
     dt = parse_date(dir_name)
-    return dt.strftime("%Y-%m-%d %H:%M")
+    return f"{dt:%Y-%m-%d %H:%M} {WEEKDAYS[dt.weekday()]}"
 
 
 def load_all_diaries():

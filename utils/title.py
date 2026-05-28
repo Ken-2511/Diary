@@ -9,8 +9,10 @@ from utils.load_diary import load_diary_entry, entry_to_content
 
 __all__ = ['create_title']
 
+base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # load config
-with open(os.path.join('config', 'config.toml'), 'rb') as f:
+with open(os.path.join(base_dir, 'config', 'config.toml'), 'rb') as f:
     config = tomllib.load(f)
 
 def create_title(dir_name: str) -> str:
@@ -26,7 +28,7 @@ def create_title(dir_name: str) -> str:
     else:
         content = str(content_raw)
 
-    with open(os.path.join('config', 'title.prompt.md'), 'r', encoding='utf-8') as f:
+    with open(os.path.join(base_dir, 'config', 'title.prompt.md'), 'r', encoding='utf-8') as f:
         title_sys_prompt = f.read()
 
     client = genai.Client()

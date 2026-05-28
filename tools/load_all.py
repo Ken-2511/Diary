@@ -5,6 +5,9 @@ print("starting to load diaries...")
 import os
 import re
 import tomllib
+from datetime import datetime
+
+WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
 def read_diary(path):
     with open(path, 'r', encoding='utf-8') as f:
@@ -33,7 +36,8 @@ for dir_name in dir_names:
     print(f"loading {dir_name}")
     # for each dir, read the diary
     y, mon, d, h, m, s = [int(i) for i in dir_name.split('-')]
-    all_content += f"(date: {y}.{mon}.{d}, time: {h}:{m})\n"
+    timestamp = datetime(y, mon, d, h, m, s)
+    all_content += f"(date: {y}.{mon}.{d}, weekday: {WEEKDAYS[timestamp.weekday()]}, time: {h}:{m})\n"
     all_content += f"### Diary ###\n\n"
     diary = read_diary(os.path.join(config['diary_dir'], dir_name, config['diary_name']))
     all_content += diary + '\n\n'
