@@ -2,10 +2,8 @@
 
 import os
 import tomllib
-from google import genai
-from google.genai import types
-from datetime import datetime
 from utils.load_diary import load_diary_entry, entry_to_content
+from utils.request_llm import request_llm
 
 __all__ = ['create_title']
 
@@ -17,29 +15,15 @@ with open(os.path.join(base_dir, 'config', 'config.toml'), 'rb') as f:
 
 def create_title(dir_name: str) -> str:
     entry = load_diary_entry(config['diary_dir'], dir_name, config)
-    content_raw = entry_to_content(entry)
-    if isinstance(content_raw, list):
-        content = []
-        for p in content_raw:
-            if isinstance(p, dict) and 'data' in p:
-                content.append(types.Part.from_bytes(data=p['data'], mime_type=p['mime_type']))
-            else:
-                content.append(str(p))
-    else:
-        content = str(content_raw)
+    content = entry_to_content(entry)
 
     with open(os.path.join(base_dir, 'config', 'title.prompt.md'), 'r', encoding='utf-8') as f:
         title_sys_prompt = f.read()
 
-    client = genai.Client()
-    response = client.models.generate_content(
-        model=config['model4title'],
-        contents=content,
-        config=types.GenerateContentConfig(
-            system_instruction=title_sys_prompt
-        )
-    )
-    title = response.text
+    title, _ = request_llm([
+        {'role': 'system', 'content': title_sys_prompt},
+        {'role': 'user', 'content': content},
+    ], config['model4title'])
     if not title:
         raise ValueError("Failed to generate title: received None from API")
     return title.strip().strip('"')

@@ -22,6 +22,9 @@ def main():
     print('Loading config...')
     with open(os.path.join(base_dir, 'config/config.toml'), 'rb') as f:
         config = tomllib.load(f)
+    if not os.environ.get('OPENROUTER_API_KEY'):
+        raise RuntimeError('OPENROUTER_API_KEY is not set')
+    print(f"Using OpenRouter model: {config['model']}")
 
     # load all diary dirs
     print('Loading diary dirs...')
@@ -58,9 +61,17 @@ def main():
     print('Loading diaries...')
     messages = []
     max_chars = config.get('max_history_chars', 0)
+    include_history_images = config.get('include_history_images', True)
     for dn in dir_names:
         entry = load_diary_entry(config['diary_dir'], dn, config)
-        messages.append({'role': 'user', 'content': entry_to_content(entry, max_chars=max_chars)})
+        messages.append({
+            'role': 'user',
+            'content': entry_to_content(
+                entry,
+                include_images=include_history_images,
+                max_chars=max_chars,
+            ),
+        })
         comment = entry['comment'] or ''
         if max_chars > 0 and len(comment) > max_chars:
             comment = comment[:max_chars] + '...[truncated]'
