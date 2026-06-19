@@ -5,7 +5,7 @@ This is the new diary-with-AI-feedback project for one of my best friends (as we
 ### The workflow
 
 1. The user writes a diary entry by running the `diary.py` script. This will create a diary entry in the diary folder.
-2. The user then runs the `agent_comment.py` script. This creates an agentic comment using chunk search.
+2. The user then runs the `comment.py` script. This creates an agentic comment using chunk search.
 
 ### Features and Importances
 

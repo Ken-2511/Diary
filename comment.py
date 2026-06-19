@@ -22,7 +22,7 @@ DIARY_NAME = CONFIG.get("diary_name", "diary.txt")
 TITLE_NAME = CONFIG.get("title_name", "title.txt")
 COMMENT_NAME = CONFIG.get("comment_name", "comment.txt")
 TEMP_DIR = Path("temp")
-COMMENT_PATH = TEMP_DIR / "agent_comment.txt"
+COMMENT_PATH = TEMP_DIR / "comment.txt"
 HISTORY_PATH = TEMP_DIR / "agent_reasoning_history.json"
 MAX_STEPS = 15
 
@@ -150,7 +150,7 @@ def main():
     records = load_chunk_index(DIARY_ROOT, target.name)
     state = [
         {"role": "system", "content": read_prompt("agent_system.prompt.md")},
-        {"role": "user", "content": f"Target title:\n{title}\n\nTarget diary:\n{diary}"},
+        {"role": "user", "content": f"Target diary id:\n{target.name}\n\nTarget date:\n{target.name[:10]}\n\nTarget time:\n{target.name[11:].replace('-', ':')}\n\nTarget title:\n{title}\n\nTarget diary:\n{diary}"},
     ]
     save_history(state)
 
