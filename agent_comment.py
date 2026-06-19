@@ -2,7 +2,9 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
+import tomllib
 from datetime import datetime
 from pathlib import Path
 
@@ -12,8 +14,12 @@ import requests
 
 CHAT_MODEL = "moonshotai/kimi-k2.6"
 EMBED_MODEL = "google/gemini-embedding-2"
-DIARY_ROOT = Path("testing_diaries")
 CONFIG_DIR = Path("config")
+CONFIG = tomllib.loads((CONFIG_DIR / "config.toml").read_text(encoding="utf-8"))
+DIARY_ROOT = Path(CONFIG["diary_dir"])
+DIARY_NAME = CONFIG.get("diary_name", "diary.txt")
+TITLE_NAME = CONFIG.get("title_name", "title.txt")
+COMMENT_NAME = CONFIG.get("comment_name", "comment.txt")
 TEMP_DIR = Path("temp")
 COMMENT_PATH = TEMP_DIR / "agent_comment.txt"
 HISTORY_PATH = TEMP_DIR / "agent_reasoning_history.json"
@@ -250,10 +256,10 @@ def get_diary(diary_id: str, include_comment: bool = False) -> dict:
         "title": meta.get("title"),
         "diary_token_count": meta.get("diary_token_count"),
         "comment_token_count": meta.get("comment_token_count"),
-        "text": (diary_dir / "diary.txt").read_text(encoding="utf-8").strip(),
+        "text": (diary_dir / DIARY_NAME).read_text(encoding="utf-8").strip(),
     }
-    if include_comment and (diary_dir / "comment.txt").exists():
-        result["comment"] = (diary_dir / "comment.txt").read_text(encoding="utf-8").strip()
+    if include_comment and (diary_dir / COMMENT_NAME).exists():
+        result["comment"] = (diary_dir / COMMENT_NAME).read_text(encoding="utf-8").strip()
     return result
 
 
@@ -300,10 +306,17 @@ def main():
         sys.stdout.reconfigure(encoding="utf-8")
 
     TEMP_DIR.mkdir(exist_ok=True)
-    diary_dirs = sorted(p for p in DIARY_ROOT.iterdir() if p.is_dir() and re.fullmatch(r"\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}", p.name))
-    target = diary_dirs[-1]
-    title = (target / "title.txt").read_text(encoding="utf-8").strip()
-    diary = (target / "diary.txt").read_text(encoding="utf-8").strip()
+    subprocess.run([sys.executable, str(Path("tools") / "build_diary_chunks.py")], check=True)
+    diary_dirs = sorted(
+        p for p in DIARY_ROOT.iterdir()
+        if p.is_dir() and re.fullmatch(r"\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}", p.name)
+    )
+    targets = [p for p in diary_dirs if (p / DIARY_NAME).exists() and not (p / COMMENT_NAME).exists()]
+    if not targets:
+        raise RuntimeError("No diary without comment found")
+    target = targets[0]
+    title = (target / TITLE_NAME).read_text(encoding="utf-8").strip() if (target / TITLE_NAME).exists() else ""
+    diary = (target / DIARY_NAME).read_text(encoding="utf-8").strip()
     records = load_chunk_index(target.name)
     state = [
         {"role": "system", "content": read_prompt("agent_system.prompt.md")},
@@ -339,8 +352,10 @@ def main():
         raise RuntimeError(f"Agent did not finish within {MAX_STEPS} steps")
 
     COMMENT_PATH.write_text(final_comment, encoding="utf-8")
+    (target / COMMENT_NAME).write_text(final_comment, encoding="utf-8")
     save_history(state)
     print(f"saved: {COMMENT_PATH}")
+    print(f"saved: {target / COMMENT_NAME}")
     print(f"saved: {HISTORY_PATH}")
 
 
