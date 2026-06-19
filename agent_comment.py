@@ -13,11 +13,16 @@ import requests
 CHAT_MODEL = "moonshotai/kimi-k2.6"
 EMBED_MODEL = "google/gemini-embedding-2"
 DIARY_ROOT = Path("testing_diaries")
+CONFIG_DIR = Path("config")
 TEMP_DIR = Path("temp")
 COMMENT_PATH = TEMP_DIR / "agent_comment.txt"
 HISTORY_PATH = TEMP_DIR / "agent_reasoning_history.json"
 MAX_STEPS = 15
 MAX_CHUNKS_PER_DIARY = 2
+
+
+def read_prompt(name: str) -> str:
+    return (CONFIG_DIR / name).read_text(encoding="utf-8").strip()
 
 
 def headers() -> dict[str, str]:
@@ -77,7 +82,17 @@ def chat_stream(messages: list[dict], name: str, json_mode: bool = False) -> dic
         if done:
             break
     print()
-    return {"name": name, "messages": messages, "content": "".join(content), "reasoning": "".join(reasoning)}
+    return {"name": name, "messages": messages, "content": "".join(content).strip(), "reasoning": "".join(reasoning)}
+
+
+def ask_action(state: list[dict], step_name: str) -> dict:
+    call = chat_stream(state, step_name, json_mode=True)
+    if call["content"].strip():
+        return call
+    retry_state = state + [{"role": "user", "content": read_prompt("agent_retry.prompt.md")}]
+    retry = chat_stream(retry_state, f"{step_name}_retry", json_mode=True)
+    retry["messages"] = retry_state
+    return retry
 
 
 def embed(texts: list[str]) -> np.ndarray:
@@ -177,35 +192,73 @@ def get_diary(diary_id: str, include_comment: bool = False) -> dict:
     return result
 
 
-def parse_action(text: str) -> dict:
-    match = re.search(r"\{[\s\S]*\}", text)
+def parse_actions(text: str) -> tuple[list[dict], dict | None]:
+    match = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", text)
     if not match:
-        raise ValueError(f"No JSON action found: {text}")
-    return json.loads(match.group(0))
+        return [], {"error": "No JSON action found.", "got": text}
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError as e:
+        return [], {"error": f"Invalid JSON action: {e}", "got": text}
+
+    items = data if isinstance(data, list) else [data]
+    if not items:
+        return [], {"error": "JSON action list is empty.", "got": data}
+
+    actions = []
+    for item in items:
+        data = item
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except json.JSONDecodeError:
+                return [], {"error": "JSON action string is not an object.", "got": data}
+        if not isinstance(data, dict):
+            return [], {"error": "JSON action must be an object.", "got": data}
+
+        if isinstance(data.get("action"), dict):
+            data = data["action"]
+        name = data.get("action") or data.get("tool") or data.get("name")
+        args = data.get("arguments") if "arguments" in data else data.get("args")
+        if name and isinstance(args, dict):
+            data = args | {"action": name}
+        elif name:
+            data["action"] = name
+        elif "comment" in data and not name:
+            data["action"] = "final_comment"
+        actions.append(data)
+    return actions, None
 
 
 def run_action(action: dict, records: list[dict], target_id: str) -> dict:
-    name = action.get("action")
-    if name == "search_chunks":
-        return {"results": search_chunks(
-            action["query"],
-            records,
-            target_id,
-            top_k=int(action.get("top_k", 5)),
-            half_life_days=action.get("half_life_days"),
-        )}
-    if name == "get_neighbor_chunks":
-        return get_neighbor_chunks(
-            action["diary_id"],
-            int(action["chunk_id"]),
-            before=int(action.get("before", 1)),
-            after=int(action.get("after", 1)),
-        )
-    if name == "get_diary":
-        return get_diary(action["diary_id"], include_comment=bool(action.get("include_comment", False)))
-    if name == "final_comment":
-        return {"comment": action["comment"]}
-    raise ValueError(f"Unknown action: {name}")
+    try:
+        name = action.get("action")
+        if name == "search_chunks":
+            return {"results": search_chunks(
+                str(action["query"]),
+                records,
+                target_id,
+                top_k=int(action.get("top_k", 5)),
+                half_life_days=action.get("half_life_days"),
+            )}
+        if name == "get_neighbor_chunks":
+            return get_neighbor_chunks(
+                str(action["diary_id"]),
+                int(action["chunk_id"]),
+                before=int(action.get("before", 1)),
+                after=int(action.get("after", 1)),
+            )
+        if name == "get_diary":
+            return get_diary(str(action["diary_id"]), include_comment=bool(action.get("include_comment", False)))
+        if name == "final_comment":
+            return {"comment": str(action["comment"])}
+        return {"error": f"Unknown action: {name}", "got": action}
+    except Exception as e:
+        return {"error": f"Tool call failed: {type(e).__name__}: {e}", "got": action}
+
+
+def save_history(messages: list[dict]) -> None:
+    HISTORY_PATH.write_text(json.dumps({"messages": messages}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main():
@@ -218,45 +271,37 @@ def main():
     title = (target / "title.txt").read_text(encoding="utf-8").strip()
     diary = (target / "diary.txt").read_text(encoding="utf-8").strip()
     records = load_chunk_index(target.name)
-    history = {
-        "target_diary_id": target.name,
-        "target_title": title,
-        "model": CHAT_MODEL,
-        "embedding_model": EMBED_MODEL,
-        "steps": [],
-    }
+    state = [
+        {"role": "system", "content": read_prompt("agent_system.prompt.md")},
+        {"role": "user", "content": f"Target title:\n{title}\n\nTarget diary:\n{diary}"},
+    ]
+    save_history(state)
 
-    system_prompt = (
-        "你是一个日记评论 agent。你可以一步一步调用工具搜索旧日记，最后写评论。"
-        "每轮只输出一个 JSON object，不要 markdown。"
-        "可用 action："
-        "{\"action\":\"search_chunks\",\"query\":\"...\",\"top_k\":5,\"half_life_days\":null或整数天数}；"
-        "{\"action\":\"get_neighbor_chunks\",\"diary_id\":\"...\",\"chunk_id\":0,\"before\":1,\"after\":1}；"
-        "{\"action\":\"get_diary\",\"diary_id\":\"...\",\"include_comment\":false}；"
-        "{\"action\":\"final_comment\",\"comment\":\"...\"}。"
-        "搜索结果里 diary_token_count 小时可以读全文；include_comment 默认 false。"
-        "引用旧日记时要温柔克制，旧记忆用于陪伴和理解，不要审判用户。"
-    )
-
-    state = [{"role": "system", "content": system_prompt}, {"role": "user", "content": f"目标标题：{title}\n\n目标日记：\n{diary}"}]
     final_comment = ""
     for step_num in range(1, MAX_STEPS + 1):
         print(f"\nAgent step {step_num}...")
-        call = chat_stream(state, f"step_{step_num}", json_mode=True)
-        action = parse_action(call["content"])
-        result = run_action(action, records, target.name)
-        history["steps"].append({"step": step_num, "llm": call, "action": action, "result": result})
-        if action.get("action") == "final_comment":
-            final_comment = result["comment"]
+        call = ask_action(state, f"step_{step_num}")
+        actions, parse_error = parse_actions(call["content"])
+        results = [parse_error] if parse_error else [run_action(action, records, target.name) for action in actions]
+        assistant_message = {"role": "assistant", "content": call["content"]}
+        if call["reasoning"]:
+            assistant_message["reasoning"] = call["reasoning"]
+        state.append(assistant_message)
+        for action, result in zip(actions or [None], results):
+            if action and action.get("action") == "final_comment" and "error" not in result:
+                final_comment = result["comment"]
+                break
+            state.append({"role": "tool", "content": json.dumps(result, ensure_ascii=False)})
+        save_history(state)
+        if final_comment:
             break
-        state.append({"role": "assistant", "content": json.dumps(action, ensure_ascii=False)})
-        state.append({"role": "user", "content": "工具结果：\n" + json.dumps(result, ensure_ascii=False)})
 
     if not final_comment:
+        save_history(state)
         raise RuntimeError(f"Agent did not finish within {MAX_STEPS} steps")
 
     COMMENT_PATH.write_text(final_comment, encoding="utf-8")
-    HISTORY_PATH.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_history(state)
     print(f"saved: {COMMENT_PATH}")
     print(f"saved: {HISTORY_PATH}")
 
