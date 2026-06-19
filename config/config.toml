@@ -9,7 +9,7 @@ prj_dir = 'C:\Users\IWMAI\OneDrive\Programs\Python\Diary'
 
 text_app = 'notepad' # Text editor for writing diary
 # OpenRouter model ids use provider/model format.
-# Set OPENROUTER_API_KEY in your environment before running comment.py.
+# Set OPENROUTER_API_KEY in your environment before running agent_comment.py.
 model = 'moonshotai/kimi-k2.6'
 model4title = 'moonshotai/kimi-k2.6'
 top_n = 20  # Default number of related diaries to filter
