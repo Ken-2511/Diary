@@ -20,6 +20,57 @@ HISTORY_PATH = TEMP_DIR / "agent_reasoning_history.json"
 MAX_STEPS = 15
 MAX_CHUNKS_PER_DIARY = 2
 
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_chunks",
+            "description": "Search old diary chunks by semantic similarity, optionally weighted by recency.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "top_k": {"type": "integer", "default": 5},
+                    "half_life_days": {"type": ["integer", "null"], "default": None},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_neighbor_chunks",
+            "description": "Read chunks around a matched chunk in the same diary.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "diary_id": {"type": "string"},
+                    "chunk_id": {"type": "integer"},
+                    "before": {"type": "integer", "default": 1},
+                    "after": {"type": "integer", "default": 1},
+                },
+                "required": ["diary_id", "chunk_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_diary",
+            "description": "Read a full diary. Comments are excluded unless include_comment is true.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "diary_id": {"type": "string"},
+                    "include_comment": {"type": "boolean", "default": False},
+                },
+                "required": ["diary_id"],
+            },
+        },
+    },
+]
+
 
 def read_prompt(name: str) -> str:
     return (CONFIG_DIR / name).read_text(encoding="utf-8").strip()
@@ -37,15 +88,17 @@ def headers() -> dict[str, str]:
     return result
 
 
-def chat_stream(messages: list[dict], name: str, json_mode: bool = False) -> dict:
+def chat_stream(messages: list[dict], name: str) -> dict:
+    allowed = {"role", "content", "tool_calls", "tool_call_id", "name"}
+    api_messages = [{k: v for k, v in message.items() if k in allowed} for message in messages]
     payload = {
         "model": CHAT_MODEL,
-        "messages": messages,
+        "messages": api_messages,
+        "tools": TOOLS,
+        "tool_choice": "auto",
         "stream": True,
         "reasoning": {"enabled": True, "effort": "medium", "exclude": False},
     }
-    if json_mode:
-        payload["response_format"] = {"type": "json_object"}
 
     response = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
@@ -57,7 +110,7 @@ def chat_stream(messages: list[dict], name: str, json_mode: bool = False) -> dic
     response.raise_for_status()
     response.encoding = "utf-8"
 
-    content, reasoning, buffer, done = [], [], "", False
+    content, reasoning, buffer, tool_calls, done = [], [], "", {}, False
     for piece in response.iter_content(chunk_size=4096, decode_unicode=True):
         buffer += piece
         while "\n\n" in buffer:
@@ -73,6 +126,22 @@ def chat_stream(messages: list[dict], name: str, json_mode: bool = False) -> dic
             if delta.get("content"):
                 print(delta["content"], end="", flush=True)
                 content.append(delta["content"])
+            for tool_call in delta.get("tool_calls") or []:
+                index = tool_call.get("index", len(tool_calls))
+                saved = tool_calls.setdefault(index, {
+                    "id": "",
+                    "type": "function",
+                    "function": {"name": "", "arguments": ""},
+                })
+                if tool_call.get("id"):
+                    saved["id"] += tool_call["id"]
+                if tool_call.get("type"):
+                    saved["type"] = tool_call["type"]
+                function = tool_call.get("function") or {}
+                if function.get("name"):
+                    saved["function"]["name"] += function["name"]
+                if function.get("arguments"):
+                    saved["function"]["arguments"] += function["arguments"]
             if delta.get("reasoning"):
                 reasoning.append(delta["reasoning"])
             elif delta.get("reasoning_details"):
@@ -82,17 +151,13 @@ def chat_stream(messages: list[dict], name: str, json_mode: bool = False) -> dic
         if done:
             break
     print()
-    return {"name": name, "messages": messages, "content": "".join(content).strip(), "reasoning": "".join(reasoning)}
-
-
-def ask_action(state: list[dict], step_name: str) -> dict:
-    call = chat_stream(state, step_name, json_mode=True)
-    if call["content"].strip():
-        return call
-    retry_state = state + [{"role": "user", "content": read_prompt("agent_retry.prompt.md")}]
-    retry = chat_stream(retry_state, f"{step_name}_retry", json_mode=True)
-    retry["messages"] = retry_state
-    return retry
+    return {
+        "name": name,
+        "messages": messages,
+        "content": "".join(content).strip(),
+        "reasoning": "".join(reasoning),
+        "tool_calls": [tool_calls[i] for i in sorted(tool_calls)],
+    }
 
 
 def embed(texts: list[str]) -> np.ndarray:
@@ -192,69 +257,38 @@ def get_diary(diary_id: str, include_comment: bool = False) -> dict:
     return result
 
 
-def parse_actions(text: str) -> tuple[list[dict], dict | None]:
-    match = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", text)
-    if not match:
-        return [], {"error": "No JSON action found.", "got": text}
+def run_tool(name: str, args: dict, records: list[dict], target_id: str) -> dict:
     try:
-        data = json.loads(match.group(0))
-    except json.JSONDecodeError as e:
-        return [], {"error": f"Invalid JSON action: {e}", "got": text}
-
-    items = data if isinstance(data, list) else [data]
-    if not items:
-        return [], {"error": "JSON action list is empty.", "got": data}
-
-    actions = []
-    for item in items:
-        data = item
-        if isinstance(data, str):
-            try:
-                data = json.loads(data)
-            except json.JSONDecodeError:
-                return [], {"error": "JSON action string is not an object.", "got": data}
-        if not isinstance(data, dict):
-            return [], {"error": "JSON action must be an object.", "got": data}
-
-        if isinstance(data.get("action"), dict):
-            data = data["action"]
-        name = data.get("action") or data.get("tool") or data.get("name")
-        args = data.get("arguments") if "arguments" in data else data.get("args")
-        if name and isinstance(args, dict):
-            data = args | {"action": name}
-        elif name:
-            data["action"] = name
-        elif "comment" in data and not name:
-            data["action"] = "final_comment"
-        actions.append(data)
-    return actions, None
-
-
-def run_action(action: dict, records: list[dict], target_id: str) -> dict:
-    try:
-        name = action.get("action")
         if name == "search_chunks":
             return {"results": search_chunks(
-                str(action["query"]),
+                str(args["query"]),
                 records,
                 target_id,
-                top_k=int(action.get("top_k", 5)),
-                half_life_days=action.get("half_life_days"),
+                top_k=int(args.get("top_k", 5)),
+                half_life_days=args.get("half_life_days"),
             )}
         if name == "get_neighbor_chunks":
             return get_neighbor_chunks(
-                str(action["diary_id"]),
-                int(action["chunk_id"]),
-                before=int(action.get("before", 1)),
-                after=int(action.get("after", 1)),
+                str(args["diary_id"]),
+                int(args["chunk_id"]),
+                before=int(args.get("before", 1)),
+                after=int(args.get("after", 1)),
             )
         if name == "get_diary":
-            return get_diary(str(action["diary_id"]), include_comment=bool(action.get("include_comment", False)))
-        if name == "final_comment":
-            return {"comment": str(action["comment"])}
-        return {"error": f"Unknown action: {name}", "got": action}
+            return get_diary(str(args["diary_id"]), include_comment=bool(args.get("include_comment", False)))
+        return {"error": f"Unknown tool: {name}", "got": args}
     except Exception as e:
-        return {"error": f"Tool call failed: {type(e).__name__}: {e}", "got": action}
+        return {"error": f"Tool call failed: {type(e).__name__}: {e}", "got": args}
+
+
+def run_tool_call(tool_call: dict, records: list[dict], target_id: str) -> dict:
+    function = tool_call.get("function") or {}
+    name = function.get("name", "")
+    try:
+        args = json.loads(function.get("arguments") or "{}")
+    except json.JSONDecodeError as e:
+        return {"error": f"Invalid tool arguments JSON: {e}", "got": function.get("arguments")}
+    return run_tool(name, args, records, target_id)
 
 
 def save_history(messages: list[dict]) -> None:
@@ -280,21 +314,25 @@ def main():
     final_comment = ""
     for step_num in range(1, MAX_STEPS + 1):
         print(f"\nAgent step {step_num}...")
-        call = ask_action(state, f"step_{step_num}")
-        actions, parse_error = parse_actions(call["content"])
-        results = [parse_error] if parse_error else [run_action(action, records, target.name) for action in actions]
-        assistant_message = {"role": "assistant", "content": call["content"]}
+        call = chat_stream(state, f"step_{step_num}")
+        assistant_message = {"role": "assistant", "content": call["content"] or None}
         if call["reasoning"]:
             assistant_message["reasoning"] = call["reasoning"]
+        if call["tool_calls"]:
+            assistant_message["tool_calls"] = call["tool_calls"]
         state.append(assistant_message)
-        for action, result in zip(actions or [None], results):
-            if action and action.get("action") == "final_comment" and "error" not in result:
-                final_comment = result["comment"]
-                break
-            state.append({"role": "tool", "content": json.dumps(result, ensure_ascii=False)})
-        save_history(state)
-        if final_comment:
+        if not call["tool_calls"]:
+            final_comment = call["content"]
+            save_history(state)
             break
+        for tool_call in call["tool_calls"]:
+            result = run_tool_call(tool_call, records, target.name)
+            state.append({
+                "role": "tool",
+                "tool_call_id": tool_call.get("id", ""),
+                "content": json.dumps(result, ensure_ascii=False),
+            })
+        save_history(state)
 
     if not final_comment:
         save_history(state)
