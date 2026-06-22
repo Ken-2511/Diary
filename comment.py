@@ -136,7 +136,6 @@ def main():
         sys.stdout.reconfigure(encoding="utf-8")
 
     TEMP_DIR.mkdir(exist_ok=True)
-    subprocess.run([sys.executable, str(Path("tools") / "build_diary_chunks.py")], check=True)
     diary_dirs = sorted(
         p for p in DIARY_ROOT.iterdir()
         if p.is_dir() and re.fullmatch(r"\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}", p.name)
@@ -147,6 +146,12 @@ def main():
     target = targets[0]
     title = (target / TITLE_NAME).read_text(encoding="utf-8").strip() if (target / TITLE_NAME).exists() else ""
     diary = (target / DIARY_NAME).read_text(encoding="utf-8").strip()
+    if not diary:
+        print(f"Diary is empty: {target / DIARY_NAME}")
+        print("Please write something in the diary before generating a comment.")
+        return
+
+    subprocess.run([sys.executable, str(Path("tools") / "build_diary_chunks.py")], check=True)
     records = load_chunk_index(DIARY_ROOT, target.name)
     state = [
         {"role": "system", "content": read_prompt("agent_system.prompt.md")},
