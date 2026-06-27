@@ -1,30 +1,45 @@
+import argparse
 import io
 import json
 import os
-import re
-import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
-import numpy as np
 import requests
 
-from agent_tools import SCHEMAS, load_chunk_index, run_tool_call
+from agent_tools import (
+    DIARY_ID_RE,
+    MAIN_SCHEMAS,
+    RESEARCH_SCHEMAS,
+    diary_dirs,
+    read_entry_lines,
+    run_research_tool_call,
+)
 
 
-CHAT_MODEL = "moonshotai/kimi-k2.6"
-EMBED_MODEL = "google/gemini-embedding-2"
 CONFIG_DIR = Path("config")
 CONFIG = tomllib.loads((CONFIG_DIR / "config.toml").read_text(encoding="utf-8"))
-DIARY_ROOT = Path(CONFIG["diary_dir"])
 DIARY_NAME = CONFIG.get("diary_name", "diary.txt")
 TITLE_NAME = CONFIG.get("title_name", "title.txt")
 COMMENT_NAME = CONFIG.get("comment_name", "comment.txt")
 TEMP_DIR = Path("temp")
 COMMENT_PATH = TEMP_DIR / "comment.txt"
-HISTORY_PATH = TEMP_DIR / "agent_reasoning_history.json"
-MAX_STEPS = 15
+CANDIDATE_PATH = TEMP_DIR / "comment_candidate.txt"
+SUMMARY_PATH = TEMP_DIR / "comment_run_summary.json"
+CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+def cfg_int(name: str, default: int) -> int:
+    return int(CONFIG.get(name, default))
+
+
+CHAT_MODEL = CONFIG.get("model", "moonshotai/kimi-k2.6")
+MEMORY_MODEL = CONFIG.get("memory_model", CHAT_MODEL)
+MAX_MAIN_STEPS = cfg_int("max_main_steps", 25)
+SUGGESTED_MEMORY_QUESTIONS = cfg_int("suggested_memory_questions", 8)
+MAX_MEMORY_QUESTIONS = cfg_int("max_memory_questions", 15)
+MAX_RESEARCH_TOOL_CALLS = cfg_int("max_research_tool_calls_per_question", 20)
 
 
 def read_prompt(name: str) -> str:
@@ -43,30 +58,24 @@ def headers() -> dict[str, str]:
     return result
 
 
-def chat_stream(messages: list[dict], name: str) -> dict:
+def chat_stream(messages: list[dict], tools: list[dict], model: str, label: str, print_content: bool = True) -> dict:
     allowed = {"role", "content", "tool_calls", "tool_call_id", "name"}
     api_messages = [{k: v for k, v in message.items() if k in allowed} for message in messages]
     payload = {
-        "model": CHAT_MODEL,
+        "model": model,
         "messages": api_messages,
-        "tools": SCHEMAS,
+        "tools": tools,
         "tool_choice": "auto",
         "stream": True,
-        "reasoning": {"enabled": True, "effort": "medium", "exclude": False},
+        "reasoning": {"enabled": True, "effort": "medium", "exclude": True},
     }
 
-    response = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers=headers(),
-        json=payload,
-        stream=True,
-        timeout=600,
-    )
+    response = requests.post(CHAT_URL, headers=headers(), json=payload, stream=True, timeout=600)
     response.raise_for_status()
     response.encoding = "utf-8"
 
-    content, reasoning, buffer, tool_calls, done = [], [], "", {}, False
-    for piece in response.iter_content(chunk_size=4096, decode_unicode=True):
+    content, buffer, tool_calls, done = [], "", {}, False
+    for piece in response.iter_content(4096, decode_unicode=True):
         buffer += piece
         while "\n\n" in buffer:
             event, buffer = buffer.split("\n\n", 1)
@@ -76,10 +85,11 @@ def chat_stream(messages: list[dict], name: str) -> dict:
             if data == "[DONE]":
                 done = True
                 break
-            chunk = json.loads(data)
-            delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
+            event_json = json.loads(data)
+            delta = (event_json.get("choices") or [{}])[0].get("delta") or {}
             if delta.get("content"):
-                print(delta["content"], end="", flush=True)
+                if print_content:
+                    print(delta["content"], end="", flush=True)
                 content.append(delta["content"])
             for tool_call in delta.get("tool_calls") or []:
                 index = tool_call.get("index", len(tool_calls))
@@ -97,101 +107,242 @@ def chat_stream(messages: list[dict], name: str) -> dict:
                     saved["function"]["name"] += function["name"]
                 if function.get("arguments"):
                     saved["function"]["arguments"] += function["arguments"]
-            if delta.get("reasoning"):
-                reasoning.append(delta["reasoning"])
-            elif delta.get("reasoning_details"):
-                for part in delta["reasoning_details"]:
-                    if isinstance(part, dict) and part.get("text"):
-                        reasoning.append(part["text"])
         if done:
             break
-    print()
+    if print_content:
+        print()
     return {
-        "name": name,
-        "messages": messages,
+        "label": label,
         "content": "".join(content).strip(),
-        "reasoning": "".join(reasoning),
         "tool_calls": [tool_calls[i] for i in sorted(tool_calls)],
     }
 
 
-def embed(texts: list[str]) -> np.ndarray:
-    response = requests.post(
-        "https://openrouter.ai/api/v1/embeddings",
-        headers=headers(),
-        json={"model": EMBED_MODEL, "input": texts, "encoding_format": "float"},
-        timeout=120,
-    )
-    response.raise_for_status()
-    data = sorted(response.json()["data"], key=lambda item: item.get("index", 0))
-    return np.array([item["embedding"] for item in data], dtype=np.float32)
-
-
-def save_history(messages: list[dict]) -> None:
-    HISTORY_PATH.write_text(json.dumps({"messages": messages}, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def main():
-    if isinstance(sys.stdout, io.TextIOWrapper):
-        sys.stdout.reconfigure(encoding="utf-8")
-
-    TEMP_DIR.mkdir(exist_ok=True)
-    diary_dirs = sorted(
-        p for p in DIARY_ROOT.iterdir()
-        if p.is_dir() and re.fullmatch(r"\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}", p.name)
-    )
-    targets = [p for p in diary_dirs if (p / DIARY_NAME).exists() and not (p / COMMENT_NAME).exists()]
-    if not targets:
-        raise RuntimeError("No diary without comment found")
-    target = targets[0]
+def target_payload(target: Path) -> tuple[str, str]:
     title = (target / TITLE_NAME).read_text(encoding="utf-8").strip() if (target / TITLE_NAME).exists() else ""
     diary = (target / DIARY_NAME).read_text(encoding="utf-8").strip()
-    if not diary:
-        print(f"Diary is empty: {target / DIARY_NAME}")
-        print("Please write something in the diary before generating a comment.")
-        return
+    content = (
+        f"Target diary id:\n{target.name}\n\n"
+        f"Target date:\n{target.name[:10]}\n\n"
+        f"Target time:\n{target.name[11:].replace('-', ':')}\n\n"
+        f"Target title:\n{title}\n\n"
+        f"Suggested memory questions: about {SUGGESTED_MEMORY_QUESTIONS}\n"
+        f"Maximum memory questions: {MAX_MEMORY_QUESTIONS}\n\n"
+        f"Target diary:\n{diary}"
+    )
+    return title, content
 
-    subprocess.run([sys.executable, str(Path("tools") / "build_diary_chunks.py")], check=True)
-    records = load_chunk_index(DIARY_ROOT, target.name)
+
+def summarize_tool_call(tool_call: dict, result: dict) -> dict:
+    function = tool_call.get("function") or {}
+    try:
+        args = json.loads(function.get("arguments") or "{}")
+    except json.JSONDecodeError:
+        args = {"raw": function.get("arguments")}
+    summary = {
+        "name": function.get("name", ""),
+        "arguments": args,
+    }
+    if "results" in result:
+        summary["result_count"] = len(result.get("results") or [])
+        summary["refs"] = [item.get("ref") for item in (result.get("results") or [])[:5] if item.get("ref")]
+    elif result.get("ref"):
+        summary["refs"] = [result["ref"]]
+    if result.get("error"):
+        summary["error"] = result["error"]
+    return summary
+
+
+def run_memory_agent(question: str, target: Path, diary_root: Path) -> dict:
+    _, target_context = target_payload(target)
     state = [
-        {"role": "system", "content": read_prompt("agent_system.prompt.md")},
-        {"role": "user", "content": f"Target diary id:\n{target.name}\n\nTarget date:\n{target.name[:10]}\n\nTarget time:\n{target.name[11:].replace('-', ':')}\n\nTarget title:\n{title}\n\nTarget diary:\n{diary}"},
+        {"role": "system", "content": read_prompt("memory_system.prompt.md")},
+        {
+            "role": "user",
+            "content": (
+                f"Memory question:\n{question}\n\n"
+                "You are researching background for a new comment. Do not read the target diary's existing comment "
+                "unless the question explicitly asks about comments or previous AI feedback.\n\n"
+                f"{target_context}"
+            ),
+        },
     ]
-    save_history(state)
+    tool_summaries = []
+    tool_count = 0
 
-    final_comment = ""
-    for step_num in range(1, MAX_STEPS + 1):
-        print(f"\nAgent step {step_num}...")
-        call = chat_stream(state, f"step_{step_num}")
+    for step_num in range(1, MAX_RESEARCH_TOOL_CALLS + 2):
+        call = chat_stream(state, RESEARCH_SCHEMAS, MEMORY_MODEL, f"memory_{step_num}", print_content=False)
         assistant_message = {"role": "assistant", "content": call["content"] or None}
-        if call["reasoning"]:
-            assistant_message["reasoning"] = call["reasoning"]
         if call["tool_calls"]:
             assistant_message["tool_calls"] = call["tool_calls"]
         state.append(assistant_message)
         if not call["tool_calls"]:
-            final_comment = call["content"]
-            save_history(state)
-            break
+            return {
+                "question": question,
+                "answer": call["content"],
+                "tool_calls": tool_summaries,
+                "tool_call_count": tool_count,
+            }
+
         for tool_call in call["tool_calls"]:
-            result = run_tool_call(tool_call, records, target.name, DIARY_ROOT, DIARY_NAME, COMMENT_NAME, embed)
+            tool_count += 1
+            if tool_count > MAX_RESEARCH_TOOL_CALLS:
+                result = {"error": f"Research tool budget exceeded: {MAX_RESEARCH_TOOL_CALLS}"}
+            else:
+                result = run_research_tool_call(tool_call, diary_root, DIARY_NAME, COMMENT_NAME, TITLE_NAME)
+            tool_summaries.append(summarize_tool_call(tool_call, result))
             state.append({
                 "role": "tool",
                 "tool_call_id": tool_call.get("id", ""),
                 "content": json.dumps(result, ensure_ascii=False),
             })
-        save_history(state)
+            if tool_count > MAX_RESEARCH_TOOL_CALLS:
+                return {
+                    "question": question,
+                    "answer": "Research stopped because the tool-call budget was exceeded.",
+                    "tool_calls": tool_summaries,
+                    "tool_call_count": tool_count,
+                    "error": result["error"],
+                }
+
+    return {
+        "question": question,
+        "answer": "Research did not finish.",
+        "tool_calls": tool_summaries,
+        "tool_call_count": tool_count,
+        "error": "Research did not finish.",
+    }
+
+
+def run_main_tool_call(tool_call: dict, target: Path, diary_root: Path, memory_questions: list[dict]) -> dict:
+    function = tool_call.get("function") or {}
+    try:
+        name = function.get("name", "")
+        args = json.loads(function.get("arguments") or "{}")
+        if name == "ask_memory":
+            if len(memory_questions) >= MAX_MEMORY_QUESTIONS:
+                return {"error": f"Memory question budget exceeded: {MAX_MEMORY_QUESTIONS}"}
+            result = run_memory_agent(str(args["question"]), target, diary_root)
+            memory_questions.append(result)
+            return {
+                "question": result["question"],
+                "answer": result["answer"],
+                "tool_call_count": result["tool_call_count"],
+                "error": result.get("error"),
+            }
+        if name == "read_entry_lines":
+            return read_entry_lines(
+                diary_root,
+                DIARY_NAME,
+                COMMENT_NAME,
+                str(args["diary_id"]),
+                int(args["start_line"]),
+                int(args["end_line"]),
+                str(args.get("diary_or_comment", "diary")),
+            )
+        return {"error": f"Unknown tool: {name}", "got": args}
+    except json.JSONDecodeError as e:
+        return {"error": f"Invalid tool arguments JSON: {e}", "got": function.get("arguments")}
+    except Exception as e:
+        return {"error": f"Tool call failed: {type(e).__name__}: {e}", "got": function.get("arguments")}
+
+
+def select_target(diary_root: Path, target_id: str | None, no_save: bool) -> Path:
+    if target_id:
+        if not DIARY_ID_RE.fullmatch(target_id):
+            raise RuntimeError(f"Invalid target id: {target_id}")
+        target = diary_root / target_id
+        if not target.exists():
+            raise RuntimeError(f"Target diary folder not found: {target}")
+        if (target / COMMENT_NAME).exists() and not no_save:
+            raise RuntimeError("Target already has a comment. Use --no-save to avoid overwriting it.")
+        return target
+
+    targets = [p for p in diary_dirs(diary_root) if (p / DIARY_NAME).exists() and not (p / COMMENT_NAME).exists()]
+    if not targets:
+        raise RuntimeError("No diary without comment found")
+    return targets[0]
+
+
+def save_summary(summary: dict) -> None:
+    SUMMARY_PATH.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate a diary comment with a line-first memory agent.")
+    parser.add_argument("--diary-root", default=CONFIG["diary_dir"])
+    parser.add_argument("--target-id")
+    parser.add_argument("--no-save", action="store_true", help="Write only a temp candidate and do not overwrite the target comment.")
+    args = parser.parse_args()
+
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8")
+
+    TEMP_DIR.mkdir(exist_ok=True)
+    diary_root = Path(args.diary_root)
+    target = select_target(diary_root, args.target_id, args.no_save)
+    if not (target / DIARY_NAME).read_text(encoding="utf-8").strip():
+        print(f"Diary is empty: {target / DIARY_NAME}")
+        print("Please write something in the diary before generating a comment.")
+        return
+
+    _, user_content = target_payload(target)
+    state = [
+        {"role": "system", "content": read_prompt("agent_system.prompt.md")},
+        {"role": "user", "content": user_content},
+    ]
+    memory_questions: list[dict] = []
+    main_tool_calls = []
+    final_comment = ""
+
+    for step_num in range(1, MAX_MAIN_STEPS + 1):
+        print(f"\nMain agent step {step_num}...")
+        call = chat_stream(state, MAIN_SCHEMAS, CHAT_MODEL, f"main_{step_num}")
+        assistant_message = {"role": "assistant", "content": call["content"] or None}
+        if call["tool_calls"]:
+            assistant_message["tool_calls"] = call["tool_calls"]
+        state.append(assistant_message)
+        if not call["tool_calls"]:
+            final_comment = call["content"]
+            break
+        for tool_call in call["tool_calls"]:
+            result = run_main_tool_call(tool_call, target, diary_root, memory_questions)
+            main_tool_calls.append(summarize_tool_call(tool_call, result))
+            state.append({
+                "role": "tool",
+                "tool_call_id": tool_call.get("id", ""),
+                "content": json.dumps(result, ensure_ascii=False),
+            })
 
     if not final_comment:
-        save_history(state)
-        raise RuntimeError(f"Agent did not finish within {MAX_STEPS} steps")
+        raise RuntimeError(f"Main agent did not finish within {MAX_MAIN_STEPS} steps")
 
-    COMMENT_PATH.write_text(final_comment, encoding="utf-8")
-    (target / COMMENT_NAME).write_text(final_comment, encoding="utf-8")
-    save_history(state)
-    print(f"saved: {COMMENT_PATH}")
-    print(f"saved: {target / COMMENT_NAME}")
-    print(f"saved: {HISTORY_PATH}")
+    temp_output = CANDIDATE_PATH if args.no_save else COMMENT_PATH
+    temp_output.write_text(final_comment, encoding="utf-8")
+    saved_paths = [str(temp_output)]
+    if not args.no_save:
+        target_output = target / COMMENT_NAME
+        target_output.write_text(final_comment, encoding="utf-8")
+        saved_paths.append(str(target_output))
+
+    summary = {
+        "target_id": target.name,
+        "target_path": str(target),
+        "chat_model": CHAT_MODEL,
+        "memory_model": MEMORY_MODEL,
+        "max_memory_questions": MAX_MEMORY_QUESTIONS,
+        "max_research_tool_calls_per_question": MAX_RESEARCH_TOOL_CALLS,
+        "memory_question_count": len(memory_questions),
+        "memory_questions": memory_questions,
+        "main_tool_calls": main_tool_calls,
+        "comment_char_count": len(final_comment),
+        "no_save": args.no_save,
+        "saved_paths": saved_paths,
+    }
+    save_summary(summary)
+    for path in saved_paths:
+        print(f"saved: {path}")
+    print(f"saved: {SUMMARY_PATH}")
 
 
 if __name__ == "__main__":

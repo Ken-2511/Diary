@@ -3,7 +3,6 @@ diary_name = 'diary.txt'
 comment_name = 'comment.txt'
 title_name = 'title.txt'
 usage_name = 'usage.json'
-embedding_name = 'vec.npy'
 diary_dir = 'C:\Users\IWMAI\OneDrive\Personal-Diaries'
 prj_dir = 'C:\Users\IWMAI\OneDrive\Programs\Python\Diary'
 
@@ -12,13 +11,10 @@ text_app = 'notepad' # Text editor for writing diary
 # Set OPENROUTER_API_KEY in your environment before running comment.py.
 model = 'moonshotai/kimi-k2.6'
 model4title = 'moonshotai/kimi-k2.6'
-top_n = 20  # Default number of related diaries to filter
+memory_model = 'moonshotai/kimi-k2.6'
 
-# History diary truncation
-max_history_chars = 5000  # Max characters for each historical diary/comment (0 = no limit)
-include_history_images = true  # Set false to keep old diary images out of comment requests
-
-# Diary filtering parameters
-vec_score_weight = 1.0  # Weight for vector similarity score
-half_life_days = 30  # Half-life for time decay in days
-recency_weight = 1.0  # Weight for recency score
+# Line-first memory agent parameters
+max_main_steps = 25
+suggested_memory_questions = 8
+max_memory_questions = 15
+max_research_tool_calls_per_question = 20
