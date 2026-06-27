@@ -31,7 +31,7 @@ class CommentFlowTest(unittest.TestCase):
 
             memory_questions = []
             with patch.object(comment, "run_memory_agent", return_value=fake_result):
-                result = comment.run_main_tool_call(tool_call, target, root, memory_questions)
+                result = comment.run_main_tool_call(tool_call, target, root, memory_questions, root / "contexts")
 
             self.assertEqual(result["question"], "Sarah 之前发生过什么？")
             self.assertIn("旧背景", result["answer"])
@@ -52,8 +52,74 @@ class CommentFlowTest(unittest.TestCase):
                     "arguments": '{"diary_id": "2026-06-23-20-18-02", "start_line": 2, "end_line": 2}',
                 },
             }
-            result = comment.run_main_tool_call(tool_call, target, root, [])
+            result = comment.run_main_tool_call(tool_call, target, root, [], root / "contexts")
             self.assertEqual(result["lines"][0]["text"], "第二行")
+
+    def test_save_memory_context_writes_full_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "2026-06-23-20-18-02"
+            target.mkdir()
+            state = [
+                {"role": "system", "content": "system prompt"},
+                {"role": "user", "content": "question"},
+                {"role": "assistant", "content": "answer"},
+            ]
+
+            path = comment.save_memory_context(
+                root / "contexts",
+                1,
+                target,
+                "question",
+                state,
+                "answer",
+                [],
+                0,
+            )
+
+            self.assertTrue(Path(path).exists())
+            payload = __import__("json").loads(Path(path).read_text(encoding="utf-8"))
+            self.assertEqual(payload["agent"], "memory")
+            self.assertEqual(payload["messages"], state)
+            self.assertEqual(payload["final_answer"], "answer")
+
+    def test_memory_agent_answers_after_tool_budget_is_exceeded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "2026-06-23-20-18-02"
+            target.mkdir()
+            (target / "diary.txt").write_text("今天见到了 Sarah。", encoding="utf-8")
+
+            calls = [
+                {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "list_diaries",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                },
+                {
+                    "content": "Answer:\n已有证据足够。\n\nEvidence:\n- “今天见到了 Sarah” [2026-06-23-20-18-02 diary line:1-1]：目标日记内容。",
+                    "tool_calls": [],
+                },
+            ]
+
+            def fake_chat_stream(*args, **kwargs):
+                return calls.pop(0)
+
+            with patch.object(comment, "MAX_RESEARCH_TOOL_CALLS", 0), patch.object(comment, "chat_stream", side_effect=fake_chat_stream):
+                result = comment.run_memory_agent("Sarah 是谁？", target, root, root / "contexts", 1)
+
+            self.assertIn("已有证据足够", result["answer"])
+            self.assertEqual(result["tool_call_count"], 1)
+            payload = __import__("json").loads(Path(result["context_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(payload["final_answer"], result["answer"])
 
 
 if __name__ == "__main__":

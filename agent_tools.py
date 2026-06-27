@@ -5,14 +5,16 @@ from pathlib import Path
 
 DIARY_ID_RE = re.compile(r"\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}")
 VALID_SOURCES = {"diary", "comment"}
-PUNCTUATION = "。！？!?；;，,"
+PUNCTUATION = "\u3002\uff01\uff1f!?;,\uff1b\uff0c"
+DEFAULT_SEARCH_LIMIT = 200
+MAX_SEARCH_LIMIT = 500
 
 MAIN_SCHEMAS = [
     {
         "type": "function",
         "function": {
             "name": "ask_memory",
-            "description": "Ask a memory research sub-agent a natural-language question about past diaries. The sub-agent searches diary/comment lines and returns a concise answer with short evidence quotes.",
+            "description": "Ask a memory research sub-agent a natural-language question about past diaries. The sub-agent searches diary/comment lines and returns a precise answer with evidence quotes.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -46,13 +48,13 @@ RESEARCH_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "list_diaries",
-            "description": "List diary folders with metadata. Use date filters to inspect recent or historical periods before searching.",
+            "description": "List past diary folders with metadata. Use date filters to inspect recent or historical periods before searching.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "start_date": {"type": ["string", "null"], "default": None},
                     "end_date": {"type": ["string", "null"], "default": None},
-                    "limit": {"type": "integer", "default": 30},
+                    "limit": {"type": "integer", "default": DEFAULT_SEARCH_LIMIT},
                     "order": {"type": "string", "enum": ["asc", "desc"], "default": "desc"},
                 },
             },
@@ -62,14 +64,14 @@ RESEARCH_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "search_title",
-            "description": "Search diary titles by case-insensitive literal text.",
+            "description": "Search past diary titles by case-insensitive literal text. Returns total match counts and truncation metadata.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
                     "start_date": {"type": ["string", "null"], "default": None},
                     "end_date": {"type": ["string", "null"], "default": None},
-                    "limit": {"type": "integer", "default": 20},
+                    "limit": {"type": "integer", "default": DEFAULT_SEARCH_LIMIT},
                 },
                 "required": ["query"],
             },
@@ -78,36 +80,19 @@ RESEARCH_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "search_keyword",
-            "description": "Search diary or comment lines by case-insensitive literal text. Returns line-level results with a short quote and full line.",
+            "name": "search_text",
+            "description": "Search past diary or comment lines. Prefer mode='regex' for combined or narrowed searches; use mode='literal' only for exact plain text. Returns total match counts, truncation metadata, short quotes, full lines, and refs.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
+                    "mode": {"type": "string", "enum": ["regex", "literal"], "default": "regex"},
                     "diary_or_comment": {"type": "string", "enum": ["diary", "comment"], "default": "diary"},
                     "start_date": {"type": ["string", "null"], "default": None},
                     "end_date": {"type": ["string", "null"], "default": None},
-                    "limit": {"type": "integer", "default": 20},
+                    "limit": {"type": "integer", "default": DEFAULT_SEARCH_LIMIT},
                 },
                 "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_regex",
-            "description": "Search diary or comment lines by Python regex with case-insensitive matching. Returns line-level results with a short quote and full line.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pattern": {"type": "string"},
-                    "diary_or_comment": {"type": "string", "enum": ["diary", "comment"], "default": "diary"},
-                    "start_date": {"type": ["string", "null"], "default": None},
-                    "end_date": {"type": ["string", "null"], "default": None},
-                    "limit": {"type": "integer", "default": 20},
-                },
-                "required": ["pattern"],
             },
         },
     },
@@ -147,9 +132,32 @@ def title_for(diary_dir: Path, title_name: str) -> str | None:
     return path.read_text(encoding="utf-8").strip() or None
 
 
-def in_date_range(diary_id: str, start_date: str | None, end_date: str | None) -> bool:
+def in_scope(diary_id: str, start_date: str | None, end_date: str | None, target_id: str | None = None) -> bool:
     date = diary_id[:10]
+    if target_id and diary_id >= target_id:
+        return False
     return (start_date is None or date >= start_date) and (end_date is None or date <= end_date)
+
+
+def normalized_limit(limit: int) -> int:
+    return max(1, min(int(limit), MAX_SEARCH_LIMIT))
+
+
+def result_meta(total: int, returned: int, limit: int, target_id: str | None) -> dict:
+    truncated = total > returned
+    meta = {
+        "total_matches": total,
+        "returned_count": returned,
+        "limit": limit,
+        "truncated": truncated,
+        "scope": "past_diaries_only" if target_id else "all_diaries",
+    }
+    if truncated:
+        meta["suggestion"] = (
+            f"{total} matches found; only {returned} returned. "
+            "Narrow the search with start_date/end_date or a more specific regex."
+        )
+    return meta
 
 
 def make_ref(diary_id: str, diary_or_comment: str, start_line: int, end_line: int) -> str:
@@ -193,13 +201,15 @@ def list_diaries(
     title_name: str,
     start_date: str | None = None,
     end_date: str | None = None,
-    limit: int = 30,
+    limit: int = DEFAULT_SEARCH_LIMIT,
     order: str = "desc",
+    target_id: str | None = None,
 ) -> dict:
-    dirs = [p for p in diary_dirs(diary_root) if in_date_range(p.name, start_date, end_date)]
+    dirs = [p for p in diary_dirs(diary_root) if in_scope(p.name, start_date, end_date, target_id)]
     dirs = sorted(dirs, key=lambda p: p.name, reverse=(order != "asc"))
+    max_results = normalized_limit(limit)
     results = []
-    for diary_dir in dirs[: max(1, min(int(limit), 200))]:
+    for diary_dir in dirs[:max_results]:
         diary_path = diary_dir / diary_name
         comment_path = diary_dir / comment_name
         results.append({
@@ -212,7 +222,7 @@ def list_diaries(
             "diary_line_count": line_count(diary_path),
             "comment_line_count": line_count(comment_path),
         })
-    return {"results": results}
+    return result_meta(len(dirs), len(results), max_results, target_id) | {"results": results}
 
 
 def search_title(
@@ -221,75 +231,64 @@ def search_title(
     query: str,
     start_date: str | None = None,
     end_date: str | None = None,
-    limit: int = 20,
-) -> dict:
-    needle = query.casefold()
-    results = []
-    for diary_dir in diary_dirs(diary_root):
-        if not in_date_range(diary_dir.name, start_date, end_date):
-            continue
-        title = title_for(diary_dir, title_name)
-        if title and needle in title.casefold():
-            results.append({
-                "diary_id": diary_dir.name,
-                "date": diary_dir.name[:10],
-                "title": title,
-            })
-            if len(results) >= max(1, min(int(limit), 100)):
-                break
-    return {"results": results}
-
-
-def search_keyword(
-    diary_root: Path,
-    diary_name: str,
-    comment_name: str,
-    query: str,
-    diary_or_comment: str = "diary",
-    start_date: str | None = None,
-    end_date: str | None = None,
-    limit: int = 20,
+    limit: int = DEFAULT_SEARCH_LIMIT,
+    target_id: str | None = None,
 ) -> dict:
     if not query:
         return {"error": "query must not be empty", "results": []}
     needle = query.casefold()
+    max_results = normalized_limit(limit)
     results = []
-    max_results = max(1, min(int(limit), 100))
+    total = 0
     for diary_dir in diary_dirs(diary_root):
-        if not in_date_range(diary_dir.name, start_date, end_date):
+        if not in_scope(diary_dir.name, start_date, end_date, target_id):
             continue
-        path = entry_path(diary_root, diary_dir.name, diary_name, comment_name, diary_or_comment)
-        if not path.exists():
-            continue
-        for line_number, line in enumerate(read_lines(path), start=1):
-            start = line.casefold().find(needle)
-            if start == -1:
-                continue
-            results.append(format_line_result(diary_dir.name, diary_or_comment, line_number, line, start, start + len(query)))
-            if len(results) >= max_results:
-                return {"results": results}
-    return {"results": results}
+        title = title_for(diary_dir, title_name)
+        if title and needle in title.casefold():
+            total += 1
+            if len(results) < max_results:
+                results.append({
+                    "diary_id": diary_dir.name,
+                    "date": diary_dir.name[:10],
+                    "title": title,
+                })
+    return result_meta(total, len(results), max_results, target_id) | {"results": results}
 
 
-def search_regex(
+def compile_text_query(query: str, mode: str) -> tuple[re.Pattern | None, str | None]:
+    if not query:
+        return None, "query must not be empty"
+    if mode == "literal":
+        query = re.escape(query)
+    elif mode != "regex":
+        return None, f"Invalid search mode: {mode}"
+    try:
+        return re.compile(query, re.IGNORECASE), None
+    except re.error as e:
+        return None, f"Invalid regex: {e}"
+
+
+def search_text(
     diary_root: Path,
     diary_name: str,
     comment_name: str,
-    pattern: str,
+    query: str,
+    mode: str = "regex",
     diary_or_comment: str = "diary",
     start_date: str | None = None,
     end_date: str | None = None,
-    limit: int = 20,
+    limit: int = DEFAULT_SEARCH_LIMIT,
+    target_id: str | None = None,
 ) -> dict:
-    try:
-        regex = re.compile(pattern, re.IGNORECASE)
-    except re.error as e:
-        return {"error": f"Invalid regex: {e}", "results": []}
+    regex, error = compile_text_query(query, mode)
+    if error:
+        return {"error": error, "results": []}
 
     results = []
-    max_results = max(1, min(int(limit), 100))
+    total = 0
+    max_results = normalized_limit(limit)
     for diary_dir in diary_dirs(diary_root):
-        if not in_date_range(diary_dir.name, start_date, end_date):
+        if not in_scope(diary_dir.name, start_date, end_date, target_id):
             continue
         path = entry_path(diary_root, diary_dir.name, diary_name, comment_name, diary_or_comment)
         if not path.exists():
@@ -298,10 +297,15 @@ def search_regex(
             match = regex.search(line)
             if not match:
                 continue
-            results.append(format_line_result(diary_dir.name, diary_or_comment, line_number, line, match.start(), match.end()))
-            if len(results) >= max_results:
-                return {"results": results}
-    return {"results": results}
+            total += 1
+            if len(results) < max_results:
+                results.append(format_line_result(diary_dir.name, diary_or_comment, line_number, line, match.start(), match.end()))
+
+    return result_meta(total, len(results), max_results, target_id) | {
+        "mode": mode,
+        "diary_or_comment": diary_or_comment,
+        "results": results,
+    }
 
 
 def read_entry_lines(
@@ -344,7 +348,7 @@ def read_entry_lines(
     }
 
 
-def run_research_tool_call(tool_call: dict, diary_root: Path, diary_name: str, comment_name: str, title_name: str) -> dict:
+def run_research_tool_call(tool_call: dict, diary_root: Path, diary_name: str, comment_name: str, title_name: str, target_id: str | None) -> dict:
     function = tool_call.get("function") or {}
     try:
         name = function.get("name", "")
@@ -357,8 +361,9 @@ def run_research_tool_call(tool_call: dict, diary_root: Path, diary_name: str, c
                 title_name,
                 args.get("start_date"),
                 args.get("end_date"),
-                int(args.get("limit", 30)),
+                int(args.get("limit", DEFAULT_SEARCH_LIMIT)),
                 str(args.get("order", "desc")),
+                target_id,
             )
         if name == "search_title":
             return search_title(
@@ -367,29 +372,21 @@ def run_research_tool_call(tool_call: dict, diary_root: Path, diary_name: str, c
                 str(args["query"]),
                 args.get("start_date"),
                 args.get("end_date"),
-                int(args.get("limit", 20)),
+                int(args.get("limit", DEFAULT_SEARCH_LIMIT)),
+                target_id,
             )
-        if name == "search_keyword":
-            return search_keyword(
+        if name == "search_text":
+            return search_text(
                 diary_root,
                 diary_name,
                 comment_name,
                 str(args["query"]),
+                str(args.get("mode", "regex")),
                 str(args.get("diary_or_comment", "diary")),
                 args.get("start_date"),
                 args.get("end_date"),
-                int(args.get("limit", 20)),
-            )
-        if name == "search_regex":
-            return search_regex(
-                diary_root,
-                diary_name,
-                comment_name,
-                str(args["pattern"]),
-                str(args.get("diary_or_comment", "diary")),
-                args.get("start_date"),
-                args.get("end_date"),
-                int(args.get("limit", 20)),
+                int(args.get("limit", DEFAULT_SEARCH_LIMIT)),
+                target_id,
             )
         if name == "read_entry_lines":
             return read_entry_lines(
